@@ -1,7 +1,7 @@
 #!/bin/bash
 # PRÆTOR Frumentarii: observación en vivo.
 # Procesa una AOI real y muestra cada escena en una ventana a medida que se
-# procesa; al terminar abre el tablero web con los resultados.
+# procesa; al terminar evalúa la situación y abre el tablero con consola en vivo.
 #
 #   ./observar_en_vivo.command              -> demostración de incendios (Valparaíso/Viña)
 #   ./observar_en_vivo.command terreno      -> terreno | quemas | inundacion | marino | suelo
@@ -58,8 +58,9 @@ if [ $ESTADO -ne 0 ]; then
   exit $ESTADO
 fi
 
-echo "[4/4] Generando y abriendo el tablero web (salidas/tablero.html)..."
-"$F" viewer tablero --abrir
+echo "[4/4] Evaluando la situación y abriendo el tablero con consola en vivo..."
+"$F" inteligencia evaluar || echo "ATENCIÓN: la evaluación de inteligencia falló; el tablero se abre igual."
 echo ""
-echo "Listo. Los archivos quedaron en la carpeta salidas/."
-pausa_final
+echo "Los archivos quedaron en la carpeta salidas/."
+echo "El tablero queda abierto en http://127.0.0.1:8765  (Ctrl+C aquí para cerrarlo)."
+"$F" viewer servir

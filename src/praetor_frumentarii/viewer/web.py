@@ -21,10 +21,13 @@ log = obtener_logger("viewer.web")
 
 ETIQUETA_MODULO = {
     "terreno": "TERRENO", "cambios": "CAMBIOS", "marino": "MARINO", "suelo": "SUELO",
+    "inteligencia": "INTELIGENCIA",
 }
 COLOR_MODULO = {
     "terreno": "#38d39f", "cambios": "#ff7a45", "marino": "#3ea6ff", "suelo": "#e7b84b",
+    "inteligencia": "#c58bff",
 }
+COLOR_NIVEL = {"alta": "#ff1744", "media": "#ff9100", "baja": "#ffd54f"}
 
 
 def leer_corridas(base: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -99,6 +102,65 @@ def _capas_por_defecto(corrida: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _alertas(base: Path, mapa: Any, maximo: int = 60) -> Tuple[List[Dict[str, Any]], str]:
+    """Lee la evaluación de inteligencia y agrega su capa al mapa.
+
+    Devuelve la lista de alertas para la página y el nombre JavaScript de la capa
+    ('' si todavía no hay evaluación).
+    """
+    import folium
+
+    ruta = base / "inteligencia" / "general" / "hallazgos.geojson"
+    if not ruta.exists():
+        return [], ""
+    try:
+        import geopandas as gpd
+
+        from ..inteligencia.exposicion import describir
+        from ..inteligencia.hallazgos import ETIQUETAS
+
+        h = gpd.read_file(ruta)
+    except Exception as e:
+        log.warning("no pude leer la evaluación de inteligencia (%s)", e)
+        return [], ""
+    if len(h) == 0:
+        return [], ""
+    h = h.sort_values("prioridad", ascending=False).head(maximo).reset_index(drop=True)
+    lista = []
+    for _, f in h.iterrows():
+        oeste, sur, este, norte = f.geometry.bounds
+        evaluada = bool(f.get("exposicion_evaluada", False))
+        lista.append({
+            "id": f["id"], "tipo": f["tipo"], "etiqueta": ETIQUETAS.get(f["tipo"], f["tipo"]),
+            "categoria": f["categoria"], "aoi": f["aoi"],
+            "fecha": str(f["fecha"]).replace("T", " ").replace(" 00:00:00", "")[:16],
+            "magnitud": float(f["magnitud"]), "unidad": f["unidad"], "nivel": f["nivel"],
+            "confianza": float(f["confianza"]), "severidad": float(f["severidad"]),
+            "prioridad": float(f["prioridad"]), "fuentes": f["fuentes"],
+            "evidencia": [t for t in str(f["evidencia"] or "").split(" | ") if t],
+            "expuesto": (describir(f) + (" (%s)" % f["nombres"] if f.get("nombres") else ""))
+            if evaluada else "No evaluado (OpenStreetMap no respondió o quedó fuera del límite "
+                             "de consultas)",
+            "reservas": str(f.get("reservas") or ""), "verificar": str(f.get("verificar") or ""),
+            "motivo": str(f.get("motivo") or ""),
+            "bbox": [[sur - 0.01, oeste - 0.01], [norte + 0.01, este + 0.01]],
+        })
+    dibujo = h[["id", "tipo", "categoria", "nivel", "prioridad", "geometry"]].copy()
+    dibujo["geometry"] = dibujo.geometry.simplify(0.0003)
+    grupo = folium.FeatureGroup(name="Alertas de inteligencia", show=True)
+    folium.GeoJson(
+        json.loads(dibujo.to_json()),
+        style_function=lambda f: {
+            "color": COLOR_NIVEL.get(f["properties"]["nivel"], "#8a98a6")
+            if f["properties"]["categoria"] == "alerta" else "#8a98a6",
+            "weight": 2, "fillOpacity": 0.25,
+        },
+        tooltip=folium.GeoJsonTooltip(fields=["id", "tipo", "nivel", "prioridad"]),
+    ).add_to(grupo)
+    grupo.add_to(mapa)
+    return lista, grupo.get_name()
+
+
 def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None) -> Path:
     """Genera ``tablero.html`` (autocontenido) y devuelve su ruta."""
     import folium
@@ -125,7 +187,7 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
         esri % "Canvas/World_Dark_Gray_Base", name="Base oscura",
         attr="Teselas &copy; Esri, HERE, Garmin, &copy; colaboradores de OpenStreetMap | "
              "Contiene datos Copernicus modificados",
-        max_zoom=19, max_native_zoom=16,
+        max_zoom=19, max_native_zoom=11,
     )
     base_satelite = folium.TileLayer(
         esri % "World_Imagery", name="Satélite",
@@ -210,6 +272,9 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
             "carpeta": "%s/%s/" % (modulo, aoi),
         })
 
+    alertas_js, capa_alertas = _alertas(base, mapa)
+    from ..core import listar_aois
+
     raiz = mapa.get_root()
     def crudo(texto: str) -> "folium.Element":
         # folium interpreta el texto como plantilla Jinja: se marca como literal.
@@ -225,6 +290,9 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
         .replace("__BASE_SATELITE__", base_satelite.get_name())
         .replace("__DATOS__", json.dumps(datos_js, ensure_ascii=False).replace("</", "<\\/"))
         .replace("__LIMITES__", json.dumps(limites))
+        .replace("__ALERTAS__", json.dumps(alertas_js, ensure_ascii=False).replace("</", "<\\/"))
+        .replace("__CAPA_ALERTAS__", capa_alertas)
+        .replace("__AOIS__", json.dumps(listar_aois()))
     ))
     mapa.save(str(destino))
     if temporales.exists():
@@ -236,40 +304,10 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
 
 
 def servir(base: Optional[Path] = None, puerto: int = 8765, abrir: bool = True) -> None:
-    """Sirve ``salidas/`` en http://127.0.0.1:<puerto> y regenera el tablero en cada visita."""
-    import functools
-    import http.server
-    import webbrowser
+    """Sirve el tablero con consola en vivo (ver ``viewer.servidor``)."""
+    from .servidor import servir as _servir
 
-    base = Path(base) if base else carpeta_base()
-    generar_tablero(base)
-
-    class Manejador(http.server.SimpleHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            if self.path.split("?")[0] in ("/", "/tablero.html"):
-                try:
-                    generar_tablero(base)
-                except Exception as e:
-                    log.warning("no pude regenerar el tablero (%s)", e)
-                self.path = "/tablero.html"
-            super().do_GET()
-
-        def log_message(self, *args: Any) -> None:
-            pass
-
-    servidor = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", puerto), functools.partial(Manejador, directory=str(base))
-    )
-    url = "http://127.0.0.1:%d/" % puerto
-    log.info("tablero en %s  (Ctrl+C para detener)", url)
-    if abrir:
-        webbrowser.open(url)
-    try:
-        servidor.serve_forever()
-    except KeyboardInterrupt:
-        log.info("servidor detenido")
-    finally:
-        servidor.server_close()
+    _servir(base, puerto, abrir)
 
 
 def mapa_web(modulo: Optional[str] = None, aoi: Optional[str] = None) -> Path:
@@ -313,6 +351,37 @@ border:1px solid var(--linea);border-left:3px solid var(--c);border-radius:3px;c
 .pf-punto{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;
 background:var(--verde);box-shadow:0 0 6px var(--verde)}
 .pf-punto.av{background:var(--ambar);box-shadow:0 0 6px var(--ambar)}
+#pf-tabs{display:flex;border-bottom:1px solid var(--linea)}
+#pf-tabs span{flex:1;text-align:center;padding:11px 0 9px;font:700 10px var(--mono);
+letter-spacing:.14em;color:var(--tenue);cursor:pointer;border-bottom:2px solid transparent}
+#pf-tabs span.on{color:var(--acento);border-bottom-color:var(--acento)}
+.pf-alerta{display:flex;gap:10px;margin:6px 10px;padding:9px 10px;background:var(--panel2);
+border:1px solid var(--linea);border-left:3px solid var(--c);border-radius:3px;cursor:pointer}
+.pf-alerta:hover{border-color:#2c4257;border-left-color:var(--c)}
+.pf-alerta.activa{outline:1px solid var(--acento);background:#12202d}
+.pf-alerta .pri{font:700 17px var(--mono);color:var(--c);min-width:42px;text-align:right}
+.pf-alerta .cuerpo{min-width:0}
+.pf-alerta .mod{font:700 10px var(--mono);letter-spacing:.08em;color:var(--c);text-transform:uppercase}
+.pf-alerta .aoi{font-weight:600;color:#eaf4fb}
+.pf-alerta .meta{font:11px var(--mono);color:var(--tenue)}
+.pf-campo{padding:5px 14px}
+.pf-campo label{display:block;font:10px var(--mono);letter-spacing:.08em;color:var(--tenue);
+text-transform:uppercase;margin:0 0 3px;font-weight:400}
+.pf-campo select,.pf-campo input{width:100%;box-sizing:border-box;background:#0a1118;
+color:var(--texto);border:1px solid var(--linea);border-radius:3px;padding:6px 7px;
+font:12px var(--mono)}
+.pf-boton{margin:8px 14px 4px;padding:9px;text-align:center;font:700 11px var(--mono);
+letter-spacing:.14em;border:1px solid var(--acento);color:var(--acento);border-radius:3px;
+cursor:pointer;background:transparent;display:block;width:calc(100% - 28px)}
+.pf-boton:hover{background:#0f2836}
+.pf-boton.sec{border-color:var(--linea);color:var(--tenue)}
+#pf-log{margin:6px 14px 14px;padding:8px;background:#05080c;border:1px solid var(--linea);
+border-radius:3px;font:10.5px/1.5 var(--mono);color:#9fb3c8;height:240px;overflow:auto;
+white-space:pre-wrap;word-break:break-word}
+#pf-msg{margin:4px 14px;color:#ffd58a;font-size:12px;min-height:16px}
+#pf-estado{margin:8px 14px 0;font:11px var(--mono);color:var(--texto)}
+.pf-texto{margin:2px 14px 6px;color:var(--texto);font-size:12px}
+#pf-det ul.pf-ev{color:var(--texto);font-size:12px}
 .pf-vacio{margin:14px;padding:14px;border:1px dashed var(--linea);color:var(--tenue);
 border-radius:3px;font-size:12px}
 .pf-vacio code{display:block;margin-top:8px;color:var(--acento);font:11px var(--mono);
@@ -363,11 +432,50 @@ _HTML = r"""
   <div class="pf-dato">AVISOS<strong id="pf-na">0</strong></div>
   <div class="pf-dato">UTC<strong id="pf-utc">--:--:--</strong></div>
   <div class="pf-dato">CHILE<strong id="pf-cl">--:--:--</strong></div>
+  <div class="pf-sello" id="pf-sello-vivo" style="border-color:#6b7f92;color:#6b7f92">ARCHIVO</div>
   <div class="pf-sello">USO CIVIL</div>
 </div>
 <div id="pf-izq" class="pf-lado">
-  <div class="pf-tit"><span>Corridas registradas</span><span id="pf-todo" style="cursor:pointer;color:#39d0ff">VER TODO</span></div>
-  <div id="pf-lista"></div>
+  <div id="pf-tabs"><span id="pf-t-alertas">ALERTAS</span><span id="pf-t-corridas">CORRIDAS</span><span id="pf-t-observar">OBSERVAR</span></div>
+  <div id="pf-p-alertas">
+    <div class="pf-tit"><span>Alertas priorizadas</span><span id="pf-todo2" style="cursor:pointer;color:#39d0ff">VER TODO</span></div>
+    <div id="pf-alertas"></div>
+  </div>
+  <div id="pf-p-corridas" style="display:none">
+    <div class="pf-tit"><span>Corridas registradas</span><span id="pf-todo" style="cursor:pointer;color:#39d0ff">VER TODO</span></div>
+    <div id="pf-lista"></div>
+  </div>
+  <div id="pf-p-observar" style="display:none">
+    <div class="pf-tit"><span>Nueva observaci&oacute;n</span><span><span class="pf-punto" id="pf-vivo"></span></span></div>
+    <div id="pf-sinserv" class="pf-vacio">Este archivo solo muestra resultados ya calculados. Para lanzar observaciones y verlas en vivo, abre el tablero con el servidor local:<code>frumentarii viewer servir</code></div>
+    <div id="pf-form" style="display:none">
+      <div class="pf-campo"><label>An&aacute;lisis</label><select id="pf-an">
+        <option value="focos">Focos de calor activos (FIRMS)</option>
+        <option value="quemas">&Aacute;rea quemada (dNBR)</option>
+        <option value="inundacion">Inundaci&oacute;n</option>
+        <option value="sar">Cambio radar (SAR)</option>
+        <option value="marino">Manchas en el mar</option>
+        <option value="suelo">Alteraci&oacute;n mineral</option>
+        <option value="terreno">Costo de desplazamiento</option>
+        <option value="inteligencia">Reevaluar inteligencia</option></select></div>
+      <div class="pf-campo" id="pf-f-aoi"><label>Zona</label><select id="pf-i-aoi"></select>
+        <button class="pf-boton sec" id="pf-dibujar" style="margin:6px 0 0;width:100%">DIBUJAR ZONA EN EL MAPA</button>
+        <div id="pf-zona-txt" style="font:11px var(--mono);color:var(--tenue);margin-top:4px"></div></div>
+      <div class="pf-campo" id="pf-f-nombre" style="display:none"><label>Nombre de la zona</label><input id="pf-i-nombre" placeholder="mi_zona" maxlength="40"></div>
+      <div class="pf-campo" id="pf-f-periodo"><label>Ventana</label><select id="pf-i-periodo"><option value="24h">&Uacute;ltimas 24 h</option><option value="48h">&Uacute;ltimas 48 h</option><option value="7d">&Uacute;ltimos 7 d&iacute;as</option></select></div>
+      <div class="pf-campo" id="pf-f-antes"><label>Antes (AAAA-MM-DD/AAAA-MM-DD)</label><input id="pf-i-antes"></div>
+      <div class="pf-campo" id="pf-f-despues"><label>Despu&eacute;s (AAAA-MM-DD/AAAA-MM-DD)</label><input id="pf-i-despues"></div>
+      <div class="pf-campo" id="pf-f-fechas"><label>Fechas (AAAA-MM-DD/AAAA-MM-DD)</label><input id="pf-i-fechas"></div>
+      <div class="pf-campo" id="pf-f-metodo"><label>M&eacute;todo</label><select id="pf-i-metodo"><option value="sar">Radar (funciona con nubes)</option><option value="ndwi">&Oacute;ptico NDWI</option><option value="ambos">Ambos</option></select></div>
+      <div class="pf-campo" id="pf-f-sensor"><label>Sensor</label><select id="pf-i-sensor"><option value="s2">Sentinel-2</option><option value="landsat">Landsat 8/9</option><option value="aster">ASTER (2000 a 2008)</option></select></div>
+      <div class="pf-campo" id="pf-f-modo"><label>Modo</label><select id="pf-i-modo"><option value="pie">A pie</option><option value="4x4">4x4</option><option value="camion">Cami&oacute;n</option></select></div>
+      <button class="pf-boton" id="pf-lanzar">LANZAR OBSERVACI&Oacute;N</button>
+      <button class="pf-boton sec" id="pf-detener">DETENER</button>
+      <div id="pf-msg"></div>
+    </div>
+    <div id="pf-estado"></div>
+    <div id="pf-log"></div>
+  </div>
 </div>
 <div id="pf-der" class="pf-lado"><div id="pf-det"></div></div>
 <div id="pf-pie">
@@ -460,9 +568,15 @@ window.addEventListener("load", function(){
     mapa.flyToBounds(LIM,{padding:[30,30],duration:0.8});};
   var sat=el("pf-sat"), oscura=window["__BASE_OSCURA__"], satelite=window["__BASE_SATELITE__"];
   function base(){
-    if(sat.checked){mapa.removeLayer(oscura); mapa.addLayer(satelite); satelite.bringToBack();}
-    else{mapa.removeLayer(satelite); mapa.addLayer(oscura); oscura.bringToBack();}
+    // La base gris de Esri no tiene teselas de detalle fuera de las ciudades: al
+    // acercar (zoom 12 o más) se pasa sola a la imagen satelital.
+    var usarSat = sat.checked || mapa.getZoom() >= 12;
+    if(usarSat){ if(mapa.hasLayer(oscura)) mapa.removeLayer(oscura);
+      if(!mapa.hasLayer(satelite)){mapa.addLayer(satelite); satelite.bringToBack();} }
+    else{ if(mapa.hasLayer(satelite)) mapa.removeLayer(satelite);
+      if(!mapa.hasLayer(oscura)){mapa.addLayer(oscura); oscura.bringToBack();} }
   }
+  mapa.on("zoomend", base);
   try{sat.checked=localStorage.getItem("pf-sat")==="1";}catch(e){}
   sat.onchange=function(){try{localStorage.setItem("pf-sat",sat.checked?"1":"0");}catch(e){} base();};
   base();
@@ -472,9 +586,165 @@ window.addEventListener("load", function(){
   try{auto.checked=localStorage.getItem("pf-auto")==="1";}catch(e){}
   auto.onchange=function(){try{localStorage.setItem("pf-auto",auto.checked?"1":"0");}catch(e){} programar();};
   programar();
+  // ---------- Alertas de inteligencia ----------
+  var A = __ALERTAS__, capaAl = "__CAPA_ALERTAS__" ? window["__CAPA_ALERTAS__"] : null;
+  var NIV = {alta:"#ff1744", media:"#ff9100", baja:"#ffd54f"};
+  function colorAl(a){return a.categoria==="alerta" ? (NIV[a.nivel]||"#8a98a6") : "#8a98a6";}
+  function ocultarCorridas(){
+    activa=-1;
+    D.forEach(function(x){x._el.classList.remove("activa"); x.capas.forEach(function(k,j){
+      var L=capa(x,j); if(mapa.hasLayer(L)) mapa.removeLayer(L);});});
+  }
+  var la=el("pf-alertas");
+  if(!A.length){
+    la.innerHTML='<div class="pf-vacio">Todav&iacute;a no hay evaluaci&oacute;n. Ejecuta primero alg&uacute;n an&aacute;lisis y luego:<code>frumentarii inteligencia evaluar</code></div>';
+  }
+  A.forEach(function(a,i){
+    var d=document.createElement("div"); d.className="pf-alerta"; d.style.setProperty("--c",colorAl(a));
+    d.innerHTML='<div class="pri">'+valor(a.prioridad)+'</div><div class="cuerpo"><div class="mod">'+esc(a.etiqueta)+
+      '</div><div class="aoi">'+esc(a.aoi)+'</div><div class="meta">'+esc(a.fecha)+' &middot; '+valor(a.magnitud)+' '+esc(a.unidad)+
+      ' &middot; conf. '+esc(a.nivel)+'</div></div>';
+    d.onclick=function(){verAlerta(i);}; la.appendChild(d); a._el=d;
+  });
+  function seccion(t){return '<div class="pf-tit"><span>'+t+'</span></div>';}
+  function verAlerta(i){
+    var a=A[i]; A.forEach(function(x){x._el.classList.toggle("activa",x===a);});
+    mapa.flyToBounds(a.bbox,{padding:[60,60],maxZoom:13,duration:0.8});
+    var h='<div class="pf-tit"><span style="color:'+colorAl(a)+'">'+(a.categoria==="alerta"?"ALERTA ":"CONTEXTO ")+esc(a.id)+
+      '</span><span>'+esc(a.fecha)+'</span></div><h2>'+esc(a.etiqueta)+' en '+esc(a.aoi)+'</h2>'+
+      '<div class="desc">Fuente: '+esc(a.fuentes)+'</div><div class="pf-ind">'+
+      '<div><span>prioridad</span><strong>'+valor(a.prioridad)+'</strong></div>'+
+      '<div><span>confianza</span><strong style="color:'+colorAl(a)+'">'+esc(a.nivel)+' '+valor(a.confianza)+'</strong></div>'+
+      '<div><span>magnitud</span><strong>'+valor(a.magnitud)+' '+esc(a.unidad)+'</strong></div>'+
+      '<div><span>severidad</span><strong>'+valor(a.severidad)+'</strong></div></div>';
+    h+=seccion("Por qu&eacute; esa confianza");
+    if(a.evidencia.length){h+='<ul class="pf-ev">'; a.evidencia.forEach(function(t){h+='<li>'+esc(t)+'</li>';}); h+='</ul>';}
+    else h+='<div class="pf-texto">Una sola fuente, sin corroboraci&oacute;n disponible.</div>';
+    h+=seccion("Infraestructura civil expuesta")+'<div class="pf-texto">'+esc(a.expuesto)+'</div>';
+    if(a.reservas) h+=seccion("Reservas de la corrida")+'<div class="pf-aviso">'+esc(a.reservas)+'</div>';
+    h+=seccion("Qu&eacute; verificar")+'<div class="pf-texto">'+esc(a.verificar)+'</div>';
+    h+=seccion("C&aacute;lculo de la prioridad")+'<div class="pf-texto" style="color:#6b7f92">'+esc(a.motivo)+'</div>';
+    h+='<div class="pf-nota">La prioridad ordena qu&eacute; revisar primero; no confirma da&ntilde;os. Informe completo: '+
+       '<a href="inteligencia/general/parte.md" target="_blank">parte.md</a></div>';
+    el("pf-det").innerHTML=h;
+  }
+  function resumenAlertas(){
+    var n=A.filter(function(a){return a.categoria==="alerta";});
+    var c={alta:0,media:0,baja:0}; n.forEach(function(a){c[a.nivel]=(c[a.nivel]||0)+1;});
+    el("pf-det").innerHTML='<div class="pf-tit"><span style="color:#c58bff">EVALUACI&Oacute;N DE SITUACI&Oacute;N</span></div>'+
+      '<h2>'+n.length+' alertas en pantalla</h2><div class="desc">Hallazgos de todos los m&oacute;dulos, corroborados entre fuentes y ordenados por prioridad.</div>'+
+      '<div class="pf-ind"><div><span>confianza alta</span><strong style="color:#ff1744">'+c.alta+'</strong></div>'+
+      '<div><span>confianza media</span><strong style="color:#ff9100">'+c.media+'</strong></div>'+
+      '<div><span>confianza baja</span><strong style="color:#ffd54f">'+c.baja+'</strong></div>'+
+      '<div><span>contexto</span><strong>'+(A.length-n.length)+'</strong></div></div>'+
+      '<div class="pf-nota">Selecciona una alerta para ver por qu&eacute; tiene esa confianza, qu&eacute; infraestructura civil hay cerca y qu&eacute; conviene verificar. '+
+      (A.length?'Informe completo: <a href="inteligencia/general/parte.md" target="_blank">parte.md</a>':'')+'</div>';
+  }
+  el("pf-todo2").onclick=function(){A.forEach(function(x){x._el.classList.remove("activa");}); resumenAlertas();
+    mapa.flyToBounds(LIM,{padding:[30,30],duration:0.8});};
+
+  // ---------- Pestañas ----------
+  var TABS=["alertas","corridas","observar"];
+  function pestana(t){
+    if(TABS.indexOf(t)<0) t="alertas";
+    TABS.forEach(function(n){el("pf-p-"+n).style.display=(n===t?"block":"none"); el("pf-t-"+n).classList.toggle("on",n===t);});
+    try{localStorage.setItem("pf-tab",t);}catch(e){}
+    if(t==="corridas"){
+      if(capaAl&&mapa.hasLayer(capaAl)) mapa.removeLayer(capaAl);
+      if(D.length&&activa<0) elegir(0,false);
+      if(!D.length) el("pf-det").innerHTML='<div class="pf-vacio">Todav&iacute;a no hay corridas.</div>';
+    }else{
+      ocultarCorridas(); if(capaAl&&!mapa.hasLayer(capaAl)) mapa.addLayer(capaAl);
+      if(t==="alertas") resumenAlertas();
+    }
+  }
+  TABS.forEach(function(n){el("pf-t-"+n).onclick=function(){pestana(n);};});
+
+  // ---------- Consola en vivo ----------
+  var AOIS=__AOIS__, CAMPOS={focos:["periodo"],quemas:["antes","despues"],inundacion:["antes","despues","metodo"],
+    sar:["antes","despues"],marino:["fechas"],suelo:["sensor"],terreno:["modo"],inteligencia:[]};
+  var PRE={focos:{aoi:"chile_continental"},
+    quemas:{aoi:"valparaiso_vina",antes:"2024-01-05/2024-02-01",despues:"2024-02-04/2024-03-05"},
+    inundacion:{aoi:"biobio",antes:"2023-05-20/2023-06-18",despues:"2023-06-22/2023-07-03"},
+    sar:{aoi:"biobio",antes:"2023-05-20/2023-06-18",despues:"2023-06-22/2023-07-03"},
+    marino:{aoi:"magallanes",fechas:"2024-01-01/2024-02-29"},suelo:{aoi:"atacama"},terreno:{aoi:"chiloe"}};
+  var selAoi=el("pf-i-aoi");
+  AOIS.forEach(function(n){var o=document.createElement("option"); o.value=n; o.textContent=n; selAoi.appendChild(o);});
+  var oz=document.createElement("option"); oz.value="__zona__"; oz.textContent="(zona dibujada en el mapa)"; selAoi.appendChild(oz);
+  function msg(t){el("pf-msg").textContent=t||"";}
+  function formulario(pre){
+    var an=el("pf-an").value;
+    ["periodo","antes","despues","metodo","fechas","sensor","modo"].forEach(function(c){
+      el("pf-f-"+c).style.display=(CAMPOS[an].indexOf(c)>=0?"block":"none");});
+    el("pf-f-aoi").style.display=(an==="inteligencia"?"none":"block");
+    if(pre){var p=PRE[an]||{}; Object.keys(p).forEach(function(k){var x=el("pf-i-"+k); if(x) x.value=p[k];});}
+    el("pf-f-nombre").style.display=(an!=="inteligencia"&&selAoi.value==="__zona__"?"block":"none");
+  }
+  el("pf-an").onchange=function(){formulario(true);}; selAoi.onchange=function(){formulario(false);};
+  formulario(true);
+  var zona=null, rect=null, dibujando=false, esquina=null;
+  el("pf-dibujar").onclick=function(){dibujando=true; esquina=null; mapa.getContainer().style.cursor="crosshair";
+    el("pf-zona-txt").textContent="Haz clic en dos esquinas opuestas de la zona, sobre el mapa";};
+  mapa.on("click",function(e){
+    if(!dibujando) return;
+    if(!esquina){esquina=e.latlng; el("pf-zona-txt").textContent="Ahora la esquina opuesta"; return;}
+    var b=L.latLngBounds(esquina,e.latlng); if(rect) mapa.removeLayer(rect);
+    rect=L.rectangle(b,{color:"#39d0ff",weight:2,dashArray:"5 5",fill:false}).addTo(mapa);
+    zona=[b.getWest(),b.getSouth(),b.getEast(),b.getNorth()]; dibujando=false; mapa.getContainer().style.cursor="";
+    el("pf-zona-txt").textContent="Zona: "+zona.map(function(v){return v.toFixed(3);}).join(", ");
+    selAoi.value="__zona__"; formulario(false);
+  });
+  function api(ruta,cuerpo){
+    return fetch(ruta,{method:cuerpo?"POST":"GET",cache:"no-store",
+      headers:cuerpo?{"Content-Type":"application/json","X-Frumentarii":"1"}:{},
+      body:cuerpo?JSON.stringify(cuerpo):undefined}).then(function(r){
+        return r.json().then(function(j){j._ok=r.ok; return j;});});
+  }
+  el("pf-lanzar").onclick=function(){
+    var an=el("pf-an").value, p={analisis:an};
+    CAMPOS[an].forEach(function(c){p[c]=el("pf-i-"+c).value;});
+    if(an!=="inteligencia"){
+      if(selAoi.value==="__zona__"){
+        if(!zona){msg("Dibuja primero la zona en el mapa"); return;}
+        p.zona={nombre:el("pf-i-nombre").value,bbox:zona};
+      }else p.aoi=selAoi.value;
+    }
+    msg("Enviando...");
+    api("api/lanzar",p).then(function(j){
+      if(!j._ok){msg(j.error||"El servidor rechazó el pedido"); return;}
+      msg("Iniciado: "+j.iniciado); sondear();
+    }).catch(function(){msg("El servidor local no responde");});
+  };
+  el("pf-detener").onclick=function(){api("api/detener",{}).then(function(j){msg(j.detenido?"Deteniendo...":"No hay nada en curso");});};
+  var versionVista=null, sondeo=null;
+  function enVivo(si){
+    el("pf-sinserv").style.display=(si?"none":"block"); el("pf-form").style.display=(si?"block":"none");
+    var s=el("pf-sello-vivo"); s.textContent=(si?"EN VIVO":"ARCHIVO");
+    s.style.borderColor=s.style.color=(si?"#39d0ff":"#6b7f92");
+  }
+  function sondear(){
+    clearTimeout(sondeo);
+    api("api/estado").then(function(j){
+      enVivo(true);
+      if(j.registro.length){el("pf-log").textContent=j.registro.join("\n"); el("pf-log").scrollTop=1e9;}
+      el("pf-estado").textContent=j.activo?("EN CURSO: "+j.descripcion+" (desde "+j.inicio+")"):
+        (j.codigo===null?"Sin trabajos en curso":("Último: "+j.descripcion+(j.codigo===0?" (correcto)":" (con error)")));
+      el("pf-vivo").className="pf-punto"+(j.activo?" av":"");
+      if(versionVista===null) versionVista=j.version;
+      else if(j.version!==versionVista&&!j.activo){
+        // Hay resultados nuevos: se recarga para traer el mapa y las alertas actualizados.
+        try{sessionStorage.setItem("pf-log",el("pf-log").textContent);}catch(e){}
+        location.reload(); return;
+      }
+      sondeo=setTimeout(sondear,j.activo?1500:6000);
+    }).catch(function(){enVivo(false);});
+  }
+  try{var previo=sessionStorage.getItem("pf-log"); if(previo) el("pf-log").textContent=previo;}catch(e){}
+  sondear();
+
   setTimeout(function(){mapa.invalidateSize(); mapa.fitBounds(LIM,{padding:[30,30]});
-    if(D.length) elegir(0,D.length===1);
-    else el("pf-det").innerHTML='<div class="pf-vacio">Selecciona una corrida para ver sus indicadores, avisos y capas.</div>';
+    var t0="alertas"; try{t0=localStorage.getItem("pf-tab")||"alertas";}catch(e){}
+    pestana(t0);
   },150);
 });
 """

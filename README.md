@@ -17,7 +17,8 @@ Cada módulo se usa por separado, desde la terminal (`frumentarii <modulo> ...`)
 | `cambios` | Cambios por desastres: focos de calor activos (NASA FIRMS), áreas quemadas (dNBR), inundación (NDWI y umbral SAR, descontando el agua habitual de JRC) y cambio de retrodispersión con proxy de coherencia. |
 | `marino` | Manchas oscuras en el mar con Sentinel-1 (indicios de derrames o filtraciones naturales), con máscara de tierra, filtro de viento y recurrencia multifecha. |
 | `suelo` | Índices de alteración mineral (óxidos de hierro, arcillas) y Crosta/PCA con Sentinel-2, Landsat y ASTER. |
-| `viewer` | Ventana en vivo que muestra cada escena al procesarse, y tablero web local con todas las corridas. |
+| `inteligencia` | Fusiona los hallazgos de todos los módulos: corrobora entre fuentes, mide la infraestructura civil expuesta, prioriza y escribe un parte de situación. |
+| `viewer` | Ventana en vivo que muestra cada escena al procesarse, y tablero web local con alertas priorizadas, corridas y una consola para lanzar observaciones. |
 
 ## Instalación
 
@@ -42,6 +43,7 @@ Los tests usan datos sintéticos y pasan sin conexión. Los marcados `red` hacen
 frumentarii --help          # módulos disponibles
 frumentarii aois            # AOIs de ejemplo
 ./observar_en_vivo.command  # demostración con ventana en vivo y tablero
+frumentarii viewer servir   # tablero con alertas y consola para lanzar observaciones
 ```
 
 Todas las salidas quedan en `salidas/<modulo>/<aoi>/`.
@@ -159,14 +161,47 @@ r = suelo.ejecutar("atacama", sensor="s2")
 print(r["crosta_arcillas"].attrs["pesos"])   # pesos del PCA, para auditar la componente elegida
 ```
 
+### inteligencia
+
+```bash
+# Evalúa todas las corridas disponibles y escribe salidas/inteligencia/general/parte.md
+frumentarii inteligencia evaluar
+
+# Solo una zona, y sin consultar OpenStreetMap (más rápido, funciona sin red)
+frumentarii inteligencia evaluar --aoi biobio --sin-exposicion
+```
+
+```python
+from praetor_frumentarii import inteligencia
+
+r = inteligencia.evaluar()
+print(r["hallazgos"][["tipo", "aoi", "prioridad", "nivel", "evidencia"]].head())
+```
+
+Qué hace, en orden:
+
+1. **Hallazgos normalizados.** Lee los polígonos que dejó cada módulo y los agrupa en eventos (un incendio es un evento, no 68 polígonos), con tipo, fecha, magnitud, severidad y una confianza de partida según la fuente.
+2. **Corroboración.** Ajusta la confianza cruzando fuentes: un área quemada con focos FIRMS cercanos en la misma fecha sube; un foco que arde 3 o más días en el mismo sitio, o que cae sobre una planta solar o industrial registrada, pasa a "fuente térmica fija"; una mancha marina que se repite cambia de interpretación. Si la otra fuente no tenía datos para esa fecha, se anota "no evaluable" y no cuenta ni a favor ni en contra.
+3. **Exposición.** Cuenta con OpenStreetMap la infraestructura civil a menos de 500 m (salud, educación, bomberos, red eléctrica, rutas principales) y las localidades a menos de 5 km.
+4. **Prioridad.** `100 × severidad × confianza × (0,4 + 0,6 × exposición)`. Cada factor queda escrito junto al resultado.
+5. **Parte de situación.** `parte.md` con, para cada alerta: dónde, cuándo, magnitud, confianza y por qué, qué está expuesto, reservas, qué verificar y cómo se calculó; más una sección de lo que no se sabe.
+
+Los hallazgos se dividen en **alertas** (posibles emergencias) y **contexto** (fuentes fijas, cambios sin clasificar, geología), que no compiten en prioridad.
+
 ### viewer
 
 ```bash
-frumentarii viewer tablero --abrir    # genera salidas/tablero.html y lo abre
-frumentarii viewer servir             # lo sirve en http://127.0.0.1:8765 y lo regenera en cada visita
+frumentarii viewer servir             # tablero con consola en vivo en http://127.0.0.1:8765
+frumentarii viewer tablero --abrir    # solo genera salidas/tablero.html y lo abre (sin consola)
 ```
 
-El tablero lee los `corrida*.json` que deja cada módulo y muestra, sobre un mapa oscuro, la lista de corridas, sus indicadores, avisos, capas activables, el PNG resumen y las fuentes. Es un único HTML autocontenido (las capas van incrustadas) que funciona abierto como archivo o servido por `viewer servir`; solo las teselas del mapa base (Esri, gris oscuro o satélite) se piden por internet. No muestra nada que los módulos no hayan calculado.
+El tablero tiene tres pestañas:
+
+- **ALERTAS:** los hallazgos de `inteligencia`, ordenados por prioridad. Al elegir uno se ve por qué tiene esa confianza, qué infraestructura civil hay cerca, qué verificar y cómo se calculó.
+- **CORRIDAS:** cada corrida con sus indicadores, avisos, capas activables, PNG resumen y fuentes.
+- **OBSERVAR:** lanza un análisis desde el navegador, sobre una AOI de ejemplo o una **zona que dibujas en el mapa** (dos clics), y muestra su registro mientras corre. Al terminar se reevalúa la inteligencia y el tablero se recarga solo.
+
+La consola OBSERVAR solo funciona con `viewer servir`; el archivo `tablero.html` abierto directamente muestra resultados ya calculados y lo indica con el sello ARCHIVO en vez de EN VIVO. El servidor escucha únicamente en `127.0.0.1`, acepta un análisis a la vez, valida cada parámetro contra listas cerradas y no ejecuta texto libre. Es un único HTML autocontenido (las capas van incrustadas) que funciona abierto como archivo o servido por `viewer servir`; solo las teselas del mapa base (Esri, gris oscuro o satélite) se piden por internet. No muestra nada que los módulos no hayan calculado.
 
 ```python
 from praetor_frumentarii.viewer import VisorVivo
@@ -229,6 +264,7 @@ Por módulo:
 - **cambios / inundación.** El radar confunde agua con sombras, pistas, arena lisa y suelos muy húmedos; no ve agua bajo bosque ni entre edificios. El agua agitada de una crecida es brillante y más difícil de separar (el flujo lo avisa).
 - **cambios / SAR.** La "coherencia" es un **proxy por correlación local de amplitud**, no coherencia interferométrica (que requiere productos SLC y procesamiento InSAR). Es bastante menos sensible al daño estructural.
 - **marino.** Una mancha oscura **no confirma un derrame**: calma de viento, sombras de viento tras la costa, algas, hielo y lluvia se ven igual. La máscara de tierra global tiene cerca de 1 km: en canales y fiordos usa `--costa` con una línea de costa detallada.
+- **inteligencia.** La prioridad ordena qué revisar primero; no es una predicción ni una medida de daño. Las confianzas de partida y los ajustes son reglas fijadas a criterio, no una calibración estadística. Solo evalúa zonas y fechas ya procesadas: que no haya alerta no significa que no haya ocurrido nada. La exposición depende de OpenStreetMap, que puede estar incompleto, y del servidor Overpass, que a veces no responde; en ese caso la alerta queda como "exposición no evaluada".
 - **suelo.** Son indicadores espectrales, no identificación de minerales. Relaves, caminos de tierra, polvo y techos responden parecido. ASTER no tiene corrección atmosférica y sus escenas son de 2000 a 2008.
 
 ## Ajustes hechos al validar con datos reales
@@ -245,6 +281,8 @@ Cada módulo se corrió con una AOI real. Esto fue lo que hubo que corregir:
 | ASTER: la ganancia cambia por escena y banda (una de las dos escenas tenía ganancia alta en las bandas 1 y 2). | Se lee `ASTERGains` del XML de cada escena. |
 | Focos FIRMS, noviembre de 2026: los grupos más intensos del país eran el volcán Nevados de Chillán y la fundición Caletones. | Los grupos detectados en 3 o más días distintos se marcan como fuente persistente y generan un aviso. |
 | Biobío: 107 de las 282 ha de "agua nueva" caían en el cauce habitual del río, que la escena previa no había captado. | Se descuenta el agua con ocurrencia histórica de 50 % o más (JRC Global Surface Water); quedan 175 ha. |
+| Inteligencia, primera evaluación real: quedó más de 10 minutos esperando a Overpass (OpenStreetMap), que respondía "502 at capacity". | Cada consulta falla a los 45 s, el total se corta a los 150 s y lo no consultado queda como "no evaluado", nunca como "sin exposición". |
+| El foco FIRMS más intenso del país (887 MW) caía sobre la planta fotovoltaica Campos del Sol: reflejo solar, no fuego. | Un foco que coincide con una instalación solar o industrial registrada en OSM se reclasifica como fuente térmica fija. |
 | Crosta clásico: la iluminación del relieve se filtraba a la componente elegida. | PCA sobre log-reflectancia centrada por píxel, que elimina el brillo común. |
 | Las teselas oscuras de CARTO ahora exigen clave de API, y las de OpenStreetMap se bloquean ("403 Access blocked") cuando el tablero se abre como archivo local, porque la página no envía origen. | El tablero usa los mapas base de Esri (gris oscuro y satélite), que funcionan en ambos casos. |
 | `rioxarray.open_rasterio` sin cerrar deja un mensaje "Error in sys.excepthook" al salir. | Los GeoTIFF se leen con `core.leer_geotiff`, que siempre cierra el archivo. |
@@ -257,7 +295,7 @@ pyproject.toml
 instalar_mac.command        crea .venv, instala y corre los tests
 observar_en_vivo.command    demostración con ventana en vivo y tablero
 src/praetor_frumentarii/
-  core/ terreno/ cambios/ marino/ suelo/ viewer/
+  core/ terreno/ cambios/ marino/ suelo/ inteligencia/ viewer/
   aois/                     GeoJSON de ejemplo (aproximados)
 tests/                      pytest con datos sintéticos, uno por módulo
 salidas/<modulo>/<aoi>/     GeoTIFF, GeoJSON, PNG resumen y corrida.json

@@ -107,3 +107,101 @@ def test_cli_viewer():
     a = crear_parser().parse_args(["servir", "--puerto", "9000", "--sin-abrir"])
     assert a.puerto == 9000 and a.sin_abrir
     assert main(["tablero"]) == 0 and main([]) == 2
+
+
+def test_construir_comando_valida_todo(tmp_path):
+    base = tmp_path / "salidas"
+    args, desc = viewer.construir_comando(
+        {"analisis": "quemas", "aoi": "valparaiso_vina", "antes": "2024-01-05/2024-02-01",
+         "despues": "2024-02-04/2024-03-05"}, base)
+    assert args == ["cambios", "quemas", "--aoi", "valparaiso_vina", "--antes",
+                    "2024-01-05/2024-02-01", "--despues", "2024-02-04/2024-03-05"]
+    assert desc == "quemas en valparaiso_vina"
+    assert viewer.construir_comando({"analisis": "inteligencia"}, base)[0] == ["inteligencia", "evaluar"]
+    args, _ = viewer.construir_comando(
+        {"analisis": "terreno", "modo": "4x4",
+         "zona": {"nombre": "mi_zona", "bbox": [-71.99, -39.30, -71.93, -39.25]}}, base)
+    ruta = base / "zonas" / "mi_zona.geojson"
+    assert args == ["terreno", "costo", "--aoi", str(ruta), "--modo", "4x4"]
+    assert core.cargar_aoi(str(ruta)).nombre == "mi_zona"
+    malos = [
+        {"analisis": "borrar_todo"},
+        {"analisis": "quemas", "aoi": "biobio; rm -rf /", "antes": "a", "despues": "b"},
+        {"analisis": "quemas", "aoi": "biobio", "antes": "2024-01-01/2024-01-31; ls",
+         "despues": "2024-02-01/2024-02-28"},
+        {"analisis": "marino", "aoi": "magallanes", "fechas": "2024-03-01/2024-01-01"},
+        {"analisis": "marino", "aoi": "magallanes", "fechas": "2024-02-30/2024-03-01"},
+        {"analisis": "terreno", "aoi": "chiloe", "modo": "tanque"},
+        {"analisis": "suelo", "aoi": "atacama", "sensor": "--help"},
+        {"analisis": "terreno", "modo": "pie", "zona": {"nombre": "../escape", "bbox": [0, 0, 1, 1]}},
+        {"analisis": "terreno", "modo": "pie", "zona": {"nombre": "chiloe", "bbox": [-74, -43, -73.9, -42.9]}},
+        {"analisis": "terreno", "modo": "pie", "zona": {"nombre": "enorme", "bbox": [-73, -40, -71, -38]}},
+        {"analisis": "terreno", "modo": "pie", "zona": {"nombre": "mal", "bbox": [-71, -39, -72, -38]}},
+        {"analisis": "terreno", "modo": "pie", "zona": {"nombre": "mal", "bbox": ["a", 1, 2, 3]}},
+    ]
+    for pedido in malos:
+        with pytest.raises(ValueError):
+            viewer.construir_comando(pedido, base)
+    assert not (base / "zonas" / "enorme.geojson").exists()
+
+
+def test_servidor_api_local(monkeypatch, tmp_path):
+    import threading
+    import time
+    import urllib.error
+    import urllib.request
+
+    from praetor_frumentarii.viewer import servidor as modulo
+
+    ejecutados = []
+
+    def falso(self, args):
+        ejecutados.append(list(args))
+        with self.candado:
+            self.lineas.append("procesando " + args[0])
+        time.sleep(0.3)
+        return 0
+
+    monkeypatch.setattr(modulo.Trabajo, "_ejecutar", falso)
+    srv, trabajo = viewer.crear_servidor(tmp_path / "salidas", 0)
+    puerto = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % puerto
+
+    def pedir(ruta, cuerpo=None, cabeceras=None):
+        datos = json.dumps(cuerpo).encode() if cuerpo is not None else None
+        req = urllib.request.Request(base + ruta, data=datos, headers=cabeceras or {})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode())
+
+    try:
+        codigo, estado = pedir("/api/estado")
+        assert codigo == 200 and estado["activo"] is False and "chiloe" in estado["aois"]
+        buenas = {"X-Frumentarii": "1", "Content-Type": "application/json"}
+        pedido = {"analisis": "focos", "aoi": "chile_continental", "periodo": "24h"}
+        # Sin la cabecera propia (como llegaría desde otra página web) se rechaza.
+        assert pedir("/api/lanzar", pedido, {"Content-Type": "application/json"})[0] == 403
+        assert pedir("/api/lanzar", pedido, dict(buenas, Host="otro.sitio.example"))[0] == 403
+        assert pedir("/api/lanzar", {"analisis": "nada"}, buenas)[0] == 400
+        assert ejecutados == []
+        codigo, r = pedir("/api/lanzar", pedido, buenas)
+        assert codigo == 200 and r["iniciado"] == "focos en chile_continental"
+        assert pedir("/api/lanzar", pedido, buenas)[0] == 409          # uno a la vez
+        for _ in range(100):
+            estado = pedir("/api/estado")[1]
+            if not estado["activo"]:
+                break
+            time.sleep(0.1)
+        assert estado["codigo"] == 0 and estado["version"] == 1
+        # Tras el análisis se encadena la evaluación de inteligencia.
+        assert ejecutados == [["cambios", "focos", "--aoi", "chile_continental", "--periodo", "24h"],
+                              ["inteligencia", "evaluar"]]
+        assert estado["registro"][-1].startswith("--- terminado correctamente")
+        with urllib.request.urlopen(base + "/", timeout=20) as r:
+            assert "PRÆTOR FRUMENTARII" in r.read().decode("utf-8")
+    finally:
+        srv.shutdown()
+        srv.server_close()

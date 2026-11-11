@@ -12,6 +12,7 @@ MODULOS = {
     "cambios": "cambios por desastres: inundaciones, áreas quemadas, daño tras terremotos",
     "marino": "manchas oscuras en el mar con Sentinel-1 (derrames y filtraciones naturales)",
     "suelo": "índices de alteración mineral con Sentinel-2, Landsat y ASTER",
+    "inteligencia": "evaluación fusionada: corroboración, exposición, prioridad y parte de situación",
     "viewer": "tablero web local y visor de resultados",
 }
 
@@ -25,7 +26,7 @@ def _ayuda() -> str:
         "",
         "Módulos:",
     ]
-    lineas += ["  %-8s %s" % (k, v) for k, v in MODULOS.items()]
+    lineas += ["  %-12s %s" % (k, v) for k, v in MODULOS.items()]
     lineas += ["", "Ayuda de un módulo: frumentarii <modulo> --help",
                "AOIs de ejemplo:    frumentarii aois"]
     return "\n".join(lineas)
