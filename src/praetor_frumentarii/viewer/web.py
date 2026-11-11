@@ -177,6 +177,8 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
                     col = capa.get("color", color)
                     folium.GeoJson(
                         gj,
+                        marker=folium.CircleMarker(radius=4, weight=1, fill=True,
+                                                   fill_opacity=0.85) if capa.get("punto") else None,
                         style_function=lambda _f, col=col, capa=capa: {
                             "color": col, "weight": capa.get("grosor", 1.5),
                             "fillColor": col, "fillOpacity": capa.get("relleno", 0.25),

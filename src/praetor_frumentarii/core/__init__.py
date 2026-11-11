@@ -18,6 +18,7 @@ from .salidas import (
     registrar_corrida,
 )
 from .sensores import (
+    cargar_agua_historica,
     cargar_aster,
     cargar_dem,
     cargar_landsat,
@@ -37,7 +38,7 @@ __all__ = [
     "componer_rgb", "crear_raster", "estirar", "leer_geotiff", "reproyectar", "resolucion", "vectorizar", "Progreso",
     "fijar_nivel", "obtener_logger", "Panel", "carpeta_salida", "guardar_geojson",
     "guardar_geotiff", "guardar_resumen_png", "registrar_corrida", "cargar_dem", "cargar_landsat",
-    "cargar_aster", "cargar_s1", "cargar_s2", "cargar_worldcover", "misma_orbita", "compuesto_s2", "mostrar_escenas",
+    "cargar_agua_historica", "cargar_aster", "cargar_s1", "cargar_s2", "cargar_worldcover", "misma_orbita", "compuesto_s2", "mostrar_escenas",
     "par_s1", "CATALOGOS", "abrir_catalogo",
     "buscar", "hay_red",
 ]

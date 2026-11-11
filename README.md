@@ -14,7 +14,7 @@ Cada módulo se usa por separado, desde la terminal (`frumentarii <modulo> ...`)
 |---|---|
 | `core` | Búsqueda STAC (Element84 Earth Search y Microsoft Planetary Computer), carga con odc-stac, AOIs en GeoJSON, reproyección a UTM, enmascarado de nubes, caché local y logging de progreso. |
 | `terreno` | Transitabilidad para rescate y logística: pendiente y rugosidad, cobertura de suelo, humedad (proxy), red vial, mapa de costo (a pie, 4x4, camión) y ruta de menor costo. |
-| `cambios` | Cambios por desastres: áreas quemadas (dNBR), inundación (NDWI y umbral SAR) y cambio de retrodispersión con proxy de coherencia. |
+| `cambios` | Cambios por desastres: focos de calor activos (NASA FIRMS), áreas quemadas (dNBR), inundación (NDWI y umbral SAR, descontando el agua habitual de JRC) y cambio de retrodispersión con proxy de coherencia. |
 | `marino` | Manchas oscuras en el mar con Sentinel-1 (indicios de derrames o filtraciones naturales), con máscara de tierra, filtro de viento y recurrencia multifecha. |
 | `suelo` | Índices de alteración mineral (óxidos de hierro, arcillas) y Crosta/PCA con Sentinel-2, Landsat y ASTER. |
 | `viewer` | Ventana en vivo que muestra cada escena al procesarse, y tablero web local con todas las corridas. |
@@ -63,6 +63,7 @@ Los límites son **aproximados**, pensados solo para demostración. No son delim
 | `biobio` | Río Biobío entre Hualqui y Santa Juana | inundaciones |
 | `magallanes` | Estrecho de Magallanes frente a Punta Arenas | marino |
 | `atacama` | Distrito El Salvador / Potrerillos | suelo |
+| `chile_continental` | Polígono muy simplificado del país | focos de calor y vistas nacionales |
 
 Están en `src/praetor_frumentarii/aois/`.
 
@@ -97,6 +98,9 @@ El costo se expresa en segundos por metro, así que la suma a lo largo de la rut
 ### cambios
 
 ```bash
+# Focos de calor activos de los últimos 7 días en todo Chile (sin clave)
+frumentarii cambios focos --aoi chile_continental --periodo 7d
+
 # Área quemada: megaincendio de Valparaíso, febrero de 2024
 frumentarii cambios quemas --aoi valparaiso_vina \
   --antes 2024-01-05/2024-02-01 --despues 2024-02-04/2024-03-05
@@ -117,7 +121,9 @@ r = cambios.ejecutar_quemas("valparaiso_vina", "2024-01-05/2024-02-01", "2024-02
 print(r["indicadores"]["area_quemada_ha"])
 ```
 
-`--metodo` de inundación acepta `sar`, `ndwi` o `ambos`.
+`--metodo` de inundación acepta `sar`, `ndwi` o `ambos`. Por defecto se descuenta el agua habitual según JRC Global Surface Water (píxeles con agua en 50 % o más de las observaciones de 1984 a 2020); con `--sin-historico` se omite. El indicador `agua_nueva_sin_registro_ha` es el agua nueva donde nunca se había registrado agua.
+
+**Focos de calor.** `--periodo` acepta `24h`, `48h` o `7d` y usa los CSV públicos de FIRMS, sin clave. Para fechas pasadas usa `--fecha AAAA-MM-DD --dias N`, que requiere una clave gratuita de FIRMS en la variable de entorno `FIRMS_MAP_KEY` (se pide en https://firms.modaps.eosdis.nasa.gov/api/map_key/). Los focos vecinos se agrupan en frentes, y los grupos detectados en 3 o más días distintos se marcan como **fuente persistente**: suelen ser industria, volcanes o antorchas de gas, no incendios.
 
 ### marino
 
@@ -191,6 +197,8 @@ Variables de entorno: `FRUMENTARII_SALIDAS` (carpeta de salidas, por defecto `./
 | Sentinel-1 (RTC) y Sentinel-2 (L2A) | Programa Copernicus (ESA), vía Earth Search y Planetary Computer | Datos libres y abiertos de Copernicus. Atribución exigida: **"Contiene datos Copernicus Sentinel modificados [año]"**. |
 | Copernicus DEM GLO-30 | ESA / Airbus, vía Earth Search y Planetary Computer | Libre. Atribución exigida: **"© DLR e.V. 2010-2014 y © Airbus Defence and Space GmbH 2014-2018, provisto bajo COPERNICUS por la Unión Europea y la ESA; todos los derechos reservados"**. |
 | ESA WorldCover 10 m 2021 v200 | ESA, vía Planetary Computer | CC BY 4.0. Cita: Zanaga et al., 2022, *ESA WorldCover 10 m 2021 v200*, doi:10.5281/zenodo.7254221. |
+| Focos activos FIRMS (VIIRS y MODIS) | NASA LANCE / EOSDIS | Uso libre. Cita: "NASA FIRMS, focos activos VIIRS 375 m y MODIS 1 km, NRT". |
+| JRC Global Surface Water 1984-2020 | Comisión Europea JRC y Google, vía Planetary Computer | Datos abiertos del programa Copernicus. Cita: Pekel et al., 2016, *Nature* 540, 418-422. |
 | Landsat 8/9 Colección 2 Nivel 2 | USGS, vía Planetary Computer | Dominio público. Se agradece citar al U.S. Geological Survey. |
 | ASTER L1T | NASA / METI / AIST / Japan Space Systems, vía Planetary Computer | Uso libre (LP DAAC). |
 | ERA5 (opcional) | Copernicus Climate Change Service | Licencia Copernicus. Atribución: "Contiene información modificada del Servicio de Cambio Climático de Copernicus [año]". |
@@ -216,6 +224,7 @@ Generales:
 Por módulo:
 
 - **terreno.** Las velocidades son órdenes de magnitud, no una calibración. OpenStreetMap puede estar incompleto o desactualizado, y no se modelan cortes, portones, estado del camino ni puentes caídos. Un DEM de 30 m suaviza quebradas y barrancos. La humedad es un proxy de radar: el bosque denso se ve "húmedo" aunque no lo esté.
+- **cambios / focos.** Un foco es una anomalía térmica de 375 m (VIIRS) o 1 km (MODIS), no un incendio confirmado: quemas agrícolas, fundiciones, antorchas y volcanes también aparecen. No se detecta bajo nubes ni humo denso, ni entre pasadas del satélite (unas pocas al día). Las horas están en UTC.
 - **cambios / quemas.** El dNBR también sube con cosechas, talas y sequía. Las imágenes posteriores tardías subestiman la severidad por rebrote.
 - **cambios / inundación.** El radar confunde agua con sombras, pistas, arena lisa y suelos muy húmedos; no ve agua bajo bosque ni entre edificios. El agua agitada de una crecida es brillante y más difícil de separar (el flujo lo avisa).
 - **cambios / SAR.** La "coherencia" es un **proxy por correlación local de amplitud**, no coherencia interferométrica (que requiere productos SLC y procesamiento InSAR). Es bastante menos sensible al daño estructural.
@@ -234,6 +243,8 @@ Cada módulo se corrió con una AOI real. Esto fue lo que hubo que corregir:
 | Magallanes: el borde de la franja Sentinel-1 aparecía como una mancha recta en las 4 fechas. | Se excluyen 800 m junto a los píxeles sin dato (`borde_m`). |
 | Atacama, ASTER: el NDWI marcaba todo el desierto como agua (sin corrección atmosférica el verde queda inflado). | En ASTER el agua se detecta por su oscuridad en el SWIR. |
 | ASTER: la ganancia cambia por escena y banda (una de las dos escenas tenía ganancia alta en las bandas 1 y 2). | Se lee `ASTERGains` del XML de cada escena. |
+| Focos FIRMS, noviembre de 2026: los grupos más intensos del país eran el volcán Nevados de Chillán y la fundición Caletones. | Los grupos detectados en 3 o más días distintos se marcan como fuente persistente y generan un aviso. |
+| Biobío: 107 de las 282 ha de "agua nueva" caían en el cauce habitual del río, que la escena previa no había captado. | Se descuenta el agua con ocurrencia histórica de 50 % o más (JRC Global Surface Water); quedan 175 ha. |
 | Crosta clásico: la iluminación del relieve se filtraba a la componente elegida. | PCA sobre log-reflectancia centrada por píxel, que elimina el brillo común. |
 | Las teselas oscuras de CARTO ahora exigen clave de API, y las de OpenStreetMap se bloquean ("403 Access blocked") cuando el tablero se abre como archivo local, porque la página no envía origen. | El tablero usa los mapas base de Esri (gris oscuro y satélite), que funcionan en ambos casos. |
 | `rioxarray.open_rasterio` sin cerrar deja un mensaje "Error in sys.excepthook" al salir. | Los GeoTIFF se leen con `core.leer_geotiff`, que siempre cierra el archivo. |

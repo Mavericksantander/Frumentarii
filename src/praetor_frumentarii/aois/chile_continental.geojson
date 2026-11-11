@@ -1,0 +1,138 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "nombre": "chile_continental",
+    "descripcion": "Chile continental (focos de calor y vistas nacionales)",
+    "modulo_sugerido": "cambios",
+    "aproximada": true,
+    "nota": "Polígono muy simplificado que sigue la cordillera a grandes rasgos. Incluye mar y puede incluir o dejar fuera franjas fronterizas. No usar como delimitación oficial."
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -69.5,
+       -17.5
+      ],
+      [
+       -68.4,
+       -19.0
+      ],
+      [
+       -68.5,
+       -21.0
+      ],
+      [
+       -67.0,
+       -23.0
+      ],
+      [
+       -68.3,
+       -24.5
+      ],
+      [
+       -68.5,
+       -27.0
+      ],
+      [
+       -69.7,
+       -29.0
+      ],
+      [
+       -70.0,
+       -32.0
+      ],
+      [
+       -69.8,
+       -34.0
+      ],
+      [
+       -70.4,
+       -36.0
+      ],
+      [
+       -71.1,
+       -38.0
+      ],
+      [
+       -71.6,
+       -40.0
+      ],
+      [
+       -71.8,
+       -42.0
+      ],
+      [
+       -71.6,
+       -44.0
+      ],
+      [
+       -71.3,
+       -46.0
+      ],
+      [
+       -72.3,
+       -48.0
+      ],
+      [
+       -73.0,
+       -50.0
+      ],
+      [
+       -72.0,
+       -51.8
+      ],
+      [
+       -68.4,
+       -52.4
+      ],
+      [
+       -68.6,
+       -54.9
+      ],
+      [
+       -66.4,
+       -55.2
+      ],
+      [
+       -67.0,
+       -56.0
+      ],
+      [
+       -76.0,
+       -56.0
+      ],
+      [
+       -76.0,
+       -45.0
+      ],
+      [
+       -74.5,
+       -38.0
+      ],
+      [
+       -72.5,
+       -30.0
+      ],
+      [
+       -71.0,
+       -20.0
+      ],
+      [
+       -70.6,
+       -17.5
+      ],
+      [
+       -69.5,
+       -17.5
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

@@ -172,14 +172,20 @@ def guardar_resumen_png(
     n = len(paneles)
     columnas = min(n, 3) if n != 4 else 2
     filas = int(np.ceil(n / columnas))
-    fig = Figure(figsize=(5.2 * columnas, 4.6 * filas + 0.9), dpi=130)
+    import textwrap
+
+    # Ancho mínimo para que título y pie no se corten con un solo panel angosto.
+    ancho = max(5.2 * columnas, 10.5)
+    fig = Figure(figsize=(ancho, 4.6 * filas + (0.9 if n > 1 else 3.4)), dpi=130)
     FigureCanvasAgg(fig)
     for i, panel in enumerate(paneles):
         dibujar_panel(fig.add_subplot(filas, columnas, i + 1), panel)
-    fig.suptitle("%s | %s" % (NOMBRE, titulo), fontsize=12, fontweight="bold")
+    fig.suptitle(textwrap.fill("%s | %s" % (NOMBRE, titulo), int(ancho * 9)), fontsize=12,
+                 fontweight="bold")
     nota = pie or "Resultado preliminar de 10 a 30 m: validar en terreno antes de decidir."
-    fig.text(0.5, 0.012, nota, ha="center", fontsize=7, color="#555555")
-    fig.tight_layout(rect=(0, 0.03, 1, 0.96))
+    fig.text(0.5, 0.012, textwrap.fill(nota, int(ancho * 17)), ha="center", va="bottom", fontsize=7,
+             color="#555555")
+    fig.tight_layout(rect=(0, 0.05, 1, 0.96))
     ruta = carpeta_salida(modulo, aoi) / (nombre + ".png")
     fig.savefig(ruta)
     log.info("  PNG      -> %s", _relativa(ruta))

@@ -98,13 +98,23 @@ def inundacion(
     pendiente: Optional[xr.DataArray] = None,
     pendiente_max: float = 8.0,
     area_min_px: int = 8,
+    ocurrencia: Optional[xr.DataArray] = None,
+    ocurrencia_max: float = 50.0,
 ) -> xr.DataArray:
     """Agua nueva: presente después y ausente antes.
 
     Con ``pendiente`` (grados) se descartan laderas, donde el agua no se
     acumula y el SAR suele dar sombras oscuras parecidas al agua.
+
+    Con ``ocurrencia`` (porcentaje histórico de agua, JRC Global Surface
+    Water) se descarta el agua habitual: si un píxel tuvo agua en
+    ``ocurrencia_max`` % o más de las observaciones históricas, que aparezca
+    con agua no es una inundación aunque la escena previa no la haya captado
+    (río bajo, viento, sombra).
     """
     nueva = np.asarray(agua_despues.values).astype(bool) & ~np.asarray(agua_antes.values).astype(bool)
+    if ocurrencia is not None:
+        nueva &= np.nan_to_num(np.asarray(ocurrencia.values), nan=0.0) < ocurrencia_max
     if pendiente is not None:
         nueva &= np.nan_to_num(np.asarray(pendiente.values), nan=0.0) <= pendiente_max
     return limpiar(como(nueva, agua_despues, "inundacion"), area_min_px)

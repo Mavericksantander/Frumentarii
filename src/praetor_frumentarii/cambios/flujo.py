@@ -7,7 +7,8 @@ import numpy as np
 import xarray as xr
 
 from ..core import (
-    AOI, Panel, Progreso, a_decibeles, cargar_aoi, cargar_dem, cargar_worldcover, como,
+    AOI, Panel, Progreso, a_decibeles, cargar_agua_historica, cargar_aoi, cargar_dem,
+    cargar_worldcover, como,
     componer_rgb, compuesto_s2, guardar_geojson, guardar_geotiff, guardar_resumen_png,
     obtener_logger, par_s1, registrar_corrida, resolucion, vectorizar,
 )
@@ -23,6 +24,10 @@ FUENTE_S1 = ("Contiene datos Copernicus Sentinel-1 modificados (ESA); correcció
              "terreno (RTC) de Microsoft Planetary Computer")
 FUENTE_DEM = "Copernicus DEM GLO-30 (© DLR e.V. 2010-2014 y © Airbus Defence and Space GmbH 2014-2018)"
 FUENTE_WC = "ESA WorldCover 10 m 2021 v200 (CC BY 4.0)"
+FUENTE_JRC = ("JRC Global Surface Water 1984-2020 (Pekel et al., 2016, Nature), Comisión Europea "
+              "JRC y Google; datos abiertos del programa Copernicus")
+FUENTE_FIRMS = ("Focos activos NASA FIRMS (VIIRS de NOAA-20/21 y Suomi NPP, MODIS de Terra/Aqua), "
+                "NASA LANCE/EOSDIS, uso libre con cita")
 PIE = ("AOI aproximada. Detección automática con falsos positivos posibles: validar en terreno. "
        "Contiene datos Copernicus Sentinel modificados.")
 
@@ -117,9 +122,13 @@ def ejecutar_quemas(
 def ejecutar_inundacion(
     aoi: Union[AOI, str], antes: str, despues: str, metodo: str = "sar",
     umbral_db: Optional[float] = None, nubes_max: float = 60.0, resolucion_m: float = 20.0,
-    area_min_ha: float = 0.5, visor: Any = None,
+    area_min_ha: float = 0.5, visor: Any = None, usar_historico: bool = True,
 ) -> Dict[str, Any]:
-    """Agua nueva entre dos períodos. ``metodo``: 'sar', 'ndwi' o 'ambos'."""
+    """Agua nueva entre dos períodos. ``metodo``: 'sar', 'ndwi' o 'ambos'.
+
+    Con ``usar_historico`` se descarga la ocurrencia de agua de JRC Global
+    Surface Water para no contar como inundación el agua habitual.
+    """
     if metodo not in ("sar", "ndwi", "ambos"):
         raise ValueError("metodo debe ser 'sar', 'ndwi' o 'ambos'")
     aoi = cargar_aoi(aoi)
@@ -187,12 +196,25 @@ def ejecutar_inundacion(
         pend = _pendiente(dem).interp_like(agua_d, method="nearest")
     except Exception as e:
         avisos.append("Sin DEM para filtrar laderas (%s)" % type(e).__name__)
-    nueva = _inu.inundacion(agua_a, agua_d, pend)
+    ocurrencia = None
+    if usar_historico:
+        try:
+            ocurrencia = cargar_agua_historica(aoi, agua_d)
+            fuentes.append(FUENTE_JRC)
+        except Exception as e:
+            avisos.append("Sin agua histórica JRC (%s): el agua habitual puede contarse como "
+                          "inundación" % type(e).__name__)
+            log.warning(avisos[-1])
+    nueva = _inu.inundacion(agua_a, agua_d, pend, ocurrencia=ocurrencia)
     poligonos = vectorizar(nueva, area_min_ha, {"tipo": "inundacion", "metodo": metodo})
     ha = float(poligonos["area_ha"].sum()) if len(poligonos) else 0.0
 
     estado = np.zeros(nueva.shape, dtype="uint8")
-    estado[agua_a.values.astype(bool) & agua_d.values.astype(bool)] = 1
+    habitual = agua_a.values.astype(bool)
+    if ocurrencia is not None:
+        # El agua habitual según el registro histórico cuenta como permanente.
+        habitual = habitual | (ocurrencia.values >= 50.0)
+    estado[habitual & agua_d.values.astype(bool)] = 1
     estado[nueva.values.astype(bool)] = 2
     estado[agua_a.values.astype(bool) & ~agua_d.values.astype(bool)] = 3
     estado_da = como(estado, nueva, "estado_agua")
@@ -213,6 +235,11 @@ def ejecutar_inundacion(
     indicadores = {"agua_nueva_ha": ha, "poligonos": len(poligonos),
                    "agua_permanente_ha": float((estado == 1).sum()) * resolucion_m ** 2 / 1e4,
                    "agua_que_retrocede_ha": float((estado == 3).sum()) * resolucion_m ** 2 / 1e4}
+    if ocurrencia is not None:
+        # Agua nueva donde nunca se registró agua entre 1984 y 2020: lo más anómalo.
+        indicadores["agua_nueva_sin_registro_ha"] = float(
+            (nueva.values.astype(bool) & (ocurrencia.values <= 0)).sum()) * resolucion_m ** 2 / 1e4
+        parametros["agua_historica"] = "JRC GSW, se excluye ocurrencia >= 50 %"
     registrar_corrida(
         MODULO, aoi, titulo, indicadores, archivos + [png], avisos, parametros, fuentes,
         analisis="inundacion", png=png,
@@ -300,3 +327,90 @@ def ejecutar_sar(
     p.fin("cambio SAR listo")
     return {"resultado": r, "poligonos": poligonos, "posible_dano": pol_dano, "png": png,
             "archivos": archivos, "indicadores": indicadores, "avisos": avisos}
+
+
+def ejecutar_focos(
+    aoi: Union[AOI, str], periodo: str = "24h", sensores: Optional[Any] = None,
+    fecha: Optional[str] = None, dias: int = 1, visor: Any = None,
+) -> Dict[str, Any]:
+    """Focos de calor activos (NASA FIRMS) dentro de la AOI.
+
+    Sin ``fecha`` usa los CSV públicos recientes (``periodo`` 24h, 48h o 7d).
+    Con ``fecha`` consulta el histórico, que requiere ``FIRMS_MAP_KEY``.
+    """
+    from global_land_mask import globe
+
+    from ..core import crear_raster
+    from . import focos as _focos
+
+    aoi = cargar_aoi(aoi)
+    avisos: List[str] = []
+    p = Progreso(3, log)
+    if fecha:
+        p.paso("focos históricos FIRMS desde %s (%d día(s))" % (fecha, dias))
+        puntos = _focos.focos_historicos(aoi, fecha, dias, sensores or ("viirs-snpp",))
+        ventana = "%s + %d d" % (fecha, dias)
+    else:
+        p.paso("focos FIRMS de las últimas %s" % periodo)
+        puntos = _focos.focos_recientes(aoi, periodo, sensores or _focos.SENSORES_POR_DEFECTO)
+        ventana = "últimas %s" % periodo
+
+    p.paso("agrupación en frentes")
+    grupos = _focos.agrupar_focos(puntos, aoi.crs_utm)
+    indicadores = _focos.resumen_focos(puntos)
+    indicadores["frentes"] = int(len(grupos))
+    persistentes = int(grupos["persistente"].sum()) if len(grupos) else 0
+    indicadores["fuentes_persistentes"] = persistentes
+    indicadores["ventana"] = ventana
+    if persistentes:
+        avisos.append("%d grupo(s) arden en el mismo lugar 3 días o más: probable fuente fija "
+                      "(industria, volcán, antorcha de gas), no un incendio" % persistentes)
+    if not len(puntos):
+        avisos.append("Sin focos en la AOI para %s (también puede deberse a nubes o a que no "
+                      "hubo pasada del satélite)" % ventana)
+
+    p.paso("guardando resultados")
+    archivos = [guardar_geojson(puntos, MODULO, aoi, "focos"),
+                guardar_geojson(grupos, MODULO, aoi, "focos_frentes")]
+    # Fondo simple tierra/mar en grados para ubicar los puntos sin descargar imágenes.
+    oeste, sur, este, norte = aoi.bbox
+    paso = max((este - oeste), (norte - sur)) / 500.0
+    nx, ny = max(2, int((este - oeste) / paso)), max(2, int((norte - sur) / paso))
+    lon = oeste + (np.arange(nx) + 0.5) * paso
+    lat = norte - (np.arange(ny) + 0.5) * paso
+    tierra = globe.is_land(*np.meshgrid(lat, lon, indexing="ij"))
+    fondo = crear_raster(np.where(tierra, 0.32, 0.12).astype("float32"), "EPSG:4326", oeste,
+                         norte, paso, "fondo")
+    gris = np.dstack([fondo.values] * 3)
+    capas_puntos = []
+    for confianza, color, tam in (("baja", "#ffd54f", 5), ("nominal", "#ff9100", 9),
+                                  ("alta", "#ff1744", 14)):
+        sub = puntos[puntos["confianza"] == confianza] if len(puntos) else puntos
+        capas_puntos.append((sub, {"color": color, "markersize": tam, "alpha": 0.9}))
+    titulo = "Focos de calor FIRMS | %s | %d focos, %d frentes (%s)" % (
+        aoi.nombre, len(puntos), len(grupos), ventana)
+    fijos = grupos[grupos["persistente"]] if len(grupos) else grupos
+    capas_puntos.append((fijos, {"facecolor": "none", "edgecolor": "#40c4ff", "linewidth": 1.2}))
+    panel = Panel(gris, "Focos por confianza (amarillo, naranja, rojo); celeste: fuente persistente",
+                  referencia=fondo, vectores=capas_puntos)
+    if visor is not None:
+        visor.mostrar(panel)
+    png = guardar_resumen_png(
+        [panel], MODULO, aoi, titulo, nombre="resumen_focos",
+        pie="Un foco es una anomalía térmica de 375 m (VIIRS) o 1 km (MODIS): puede ser quema "
+            "agrícola, industria o volcán. Fuente: NASA FIRMS. Horas en UTC.",
+    )
+    registrar_corrida(
+        MODULO, aoi, titulo, indicadores, archivos + [png], avisos,
+        {"periodo": periodo, "fecha": fecha, "dias": dias}, [FUENTE_FIRMS],
+        analisis="focos", png=png,
+        capas_web=[
+            {"archivo": "focos_frentes.geojson", "titulo": "Frentes (focos agrupados)",
+             "color": "#ff9100", "relleno": 0.15, "visible": True},
+            {"archivo": "focos.geojson", "titulo": "Focos de calor", "color": "#ff1744",
+             "punto": True, "visible": True},
+        ],
+    )
+    p.fin("focos listo")
+    return {"focos": puntos, "frentes": grupos, "png": png, "archivos": archivos,
+            "indicadores": indicadores, "avisos": avisos}

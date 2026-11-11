@@ -16,14 +16,16 @@ from praetor_frumentarii.core.salidas import Panel
 
 def test_aois_de_ejemplo_estan_en_chile_y_son_aproximadas():
     nombres = core.listar_aois()
-    assert set(nombres) == {"atacama", "biobio", "chiloe", "magallanes", "valparaiso_vina"}
+    assert set(nombres) == {"atacama", "biobio", "chile_continental", "chiloe", "magallanes",
+                            "valparaiso_vina"}
     for n in nombres:
         a = core.cargar_aoi(n)
         oeste, sur, este, norte = a.bbox
-        assert -76 < oeste < este < -66 and -56 < sur < norte < -17
+        assert -77 < oeste < este < -66 and -57 < sur < norte < -17
         assert a.aproximada
         assert a.crs_utm.to_epsg() in (32718, 32719)
-        assert 50 < a.area_km2 < 2000
+        if n != "chile_continental":
+            assert 50 < a.area_km2 < 2000
 
 
 def test_aoi_desde_bbox_texto_y_archivo(tmp_path):

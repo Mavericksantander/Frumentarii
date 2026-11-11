@@ -445,3 +445,23 @@ def cargar_aster(
     ds.attrs.update(sensor="ASTER L1T", catalogo="planetary",
                     fechas_usadas=", ".join(it.datetime.strftime("%Y-%m-%d") for it in elegidos))
     return ds
+
+
+def cargar_agua_historica(aoi: Union[AOI, str], como: xr.DataArray) -> xr.DataArray:
+    """Ocurrencia histórica de agua (0 a 100 %) de JRC Global Surface Water.
+
+    Porcentaje de las observaciones Landsat de 1984 a 2020 en que cada píxel
+    de 30 m tuvo agua, en la grilla de ``como``. Verificado en Planetary
+    Computer: colección ``jrc-gsw``, asset ``occurrence``.
+    """
+    import rioxarray  # noqa: F401
+
+    aoi = cargar_aoi(aoi)
+    items = buscar(aoi, "jrc-gsw", catalogo="planetary")
+    if not items:
+        raise LookupError("Sin teselas JRC Global Surface Water para %s" % aoi.nombre)
+    ds = cargar(items, aoi, ["occurrence"], como=como, remuestreo="nearest", agrupar=None)
+    capa = ds["occurrence"].astype("float32")
+    capa = capa.where(capa <= 100).max("time").fillna(0.0)
+    capa.name = "ocurrencia_agua"
+    return capa.rio.write_crs(como.rio.crs)
