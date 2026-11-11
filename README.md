@@ -160,7 +160,7 @@ frumentarii viewer tablero --abrir    # genera salidas/tablero.html y lo abre
 frumentarii viewer servir             # lo sirve en http://127.0.0.1:8765 y lo regenera en cada visita
 ```
 
-El tablero lee los `corrida*.json` que deja cada módulo y muestra, sobre un mapa oscuro, la lista de corridas, sus indicadores, avisos, capas activables, el PNG resumen y las fuentes. Es un único HTML autocontenido (las capas van incrustadas); solo las teselas del mapa base se piden a OpenStreetMap. No muestra nada que los módulos no hayan calculado.
+El tablero lee los `corrida*.json` que deja cada módulo y muestra, sobre un mapa oscuro, la lista de corridas, sus indicadores, avisos, capas activables, el PNG resumen y las fuentes. Es un único HTML autocontenido (las capas van incrustadas) que funciona abierto como archivo o servido por `viewer servir`; solo las teselas del mapa base (Esri, gris oscuro o satélite) se piden por internet. No muestra nada que los módulos no hayan calculado.
 
 ```python
 from praetor_frumentarii.viewer import VisorVivo
@@ -196,6 +196,7 @@ Variables de entorno: `FRUMENTARII_SALIDAS` (carpeta de salidas, por defecto `./
 | ERA5 (opcional) | Copernicus Climate Change Service | Licencia Copernicus. Atribución: "Contiene información modificada del Servicio de Cambio Climático de Copernicus [año]". |
 | Red vial | OpenStreetMap | ODbL. Atribución: **"© Colaboradores de OpenStreetMap"**. |
 | Máscara de tierra | `global-land-mask` (datos GLOBE de NOAA) | Código MIT; datos de dominio público. |
+| Mapa base del tablero | Esri (World Dark Gray Base y World Imagery) | Servicio de teselas de uso gratuito con atribución; **no** es un dato abierto. Solo es el fondo del tablero: ningún análisis lo usa. |
 
 Si publicas un mapa hecho con esta herramienta, incluye las atribuciones de las fuentes que usaste. Los PNG resumen y el tablero ya las traen al pie.
 
@@ -234,7 +235,7 @@ Cada módulo se corrió con una AOI real. Esto fue lo que hubo que corregir:
 | Atacama, ASTER: el NDWI marcaba todo el desierto como agua (sin corrección atmosférica el verde queda inflado). | En ASTER el agua se detecta por su oscuridad en el SWIR. |
 | ASTER: la ganancia cambia por escena y banda (una de las dos escenas tenía ganancia alta en las bandas 1 y 2). | Se lee `ASTERGains` del XML de cada escena. |
 | Crosta clásico: la iluminación del relieve se filtraba a la componente elegida. | PCA sobre log-reflectancia centrada por píxel, que elimina el brillo común. |
-| Las teselas oscuras de CARTO ahora exigen clave de API. | El tablero usa teselas de OpenStreetMap oscurecidas con CSS. |
+| Las teselas oscuras de CARTO ahora exigen clave de API, y las de OpenStreetMap se bloquean ("403 Access blocked") cuando el tablero se abre como archivo local, porque la página no envía origen. | El tablero usa los mapas base de Esri (gris oscuro y satélite), que funcionan en ambos casos. |
 | `rioxarray.open_rasterio` sin cerrar deja un mensaje "Error in sys.excepthook" al salir. | Los GeoTIFF se leen con `core.leer_geotiff`, que siempre cierra el archivo. |
 | `--origen -73.7,-42.4`: argparse toma la coordenada negativa por una opción. | La CLI une opción y valor automáticamente; ambas formas funcionan. |
 

@@ -117,14 +117,24 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
         limites = [[-56.0, -76.0], [-17.5, -66.0]]  # Chile continental
 
     mapa = folium.Map(tiles=None, control_scale=True, zoom_control=True, prefer_canvas=True)
-    # Base: teselas estándar de OpenStreetMap, oscurecidas con CSS (ver .leaflet-tile-pane).
-    # No se usa CARTO porque sus teselas oscuras ahora exigen clave de API.
-    folium.TileLayer(
-        "https://tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap",
-        attr='&copy; <a href="https://www.openstreetmap.org/copyright">Colaboradores de '
-             'OpenStreetMap</a> | Contiene datos Copernicus modificados',
-        max_zoom=19,
-    ).add_to(mapa)
+    # Mapas base de Esri: funcionan también al abrir el HTML como archivo local.
+    # No se usa OpenStreetMap directo porque su servidor bloquea las teselas cuando
+    # la página no envía origen (file://), ni CARTO porque ahora exige clave de API.
+    esri = "https://server.arcgisonline.com/ArcGIS/rest/services/%s/MapServer/tile/{z}/{y}/{x}"
+    base_oscura = folium.TileLayer(
+        esri % "Canvas/World_Dark_Gray_Base", name="Base oscura",
+        attr="Teselas &copy; Esri, HERE, Garmin, &copy; colaboradores de OpenStreetMap | "
+             "Contiene datos Copernicus modificados",
+        max_zoom=19, max_native_zoom=16,
+    )
+    base_satelite = folium.TileLayer(
+        esri % "World_Imagery", name="Satélite",
+        attr="Teselas &copy; Esri, Maxar, Earthstar Geographics | Contiene datos Copernicus "
+             "modificados",
+        max_zoom=19, max_native_zoom=18, show=False,
+    )
+    base_oscura.add_to(mapa)
+    base_satelite.add_to(mapa)
     mapa.fit_bounds(limites)
 
     datos_js: List[Dict[str, Any]] = []
@@ -209,6 +219,8 @@ def generar_tablero(base: Optional[Path] = None, destino: Optional[Path] = None)
                               .replace("__VERSION__", __version__)))
     raiz.script.add_child(crudo(
         _JS.replace("__MAPA__", mapa.get_name())
+        .replace("__BASE_OSCURA__", base_oscura.get_name())
+        .replace("__BASE_SATELITE__", base_satelite.get_name())
         .replace("__DATOS__", json.dumps(datos_js, ensure_ascii=False).replace("</", "<\\/"))
         .replace("__LIMITES__", json.dumps(limites))
     ))
@@ -272,7 +284,6 @@ font:13px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
 .folium-map{position:absolute!important;top:52px!important;left:310px!important;
 right:370px!important;bottom:30px!important;width:auto!important;height:auto!important;
 background:#05080c}
-.leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.95) saturate(.35)}
 #pf-top{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:center;
 gap:18px;padding:0 16px;background:linear-gradient(#0d151e,#0a1118);
 border-bottom:1px solid var(--linea);box-sizing:border-box;z-index:1000}
@@ -328,7 +339,7 @@ gap:14px;padding:0 14px;background:#0a1118;border-top:1px solid var(--linea);
 font:11px var(--mono);color:var(--tenue);box-sizing:border-box;z-index:1000;white-space:nowrap;
 overflow:hidden}
 #pf-pie .cinta{flex:1;overflow:hidden;text-overflow:ellipsis;color:#ffd58a}
-#pf-pie label{cursor:pointer}
+#pf-pie label{cursor:pointer;margin:0;font-weight:400}
 .leaflet-container{font:12px var(--mono)}
 .leaflet-control-attribution{background:rgba(7,11,16,.8)!important;color:var(--tenue)!important}
 .leaflet-control-attribution a{color:var(--acento)!important}
@@ -360,6 +371,7 @@ _HTML = r"""
 <div id="pf-pie">
   <span>v__VERSION__</span>
   <span class="cinta" id="pf-cinta"></span>
+  <label><input type="checkbox" id="pf-sat"> base satelital</label>
   <label><input type="checkbox" id="pf-auto"> actualizar cada 30 s</label>
   <span>10 a 30 m &middot; validar en terreno</span>
 </div>
@@ -406,6 +418,11 @@ window.addEventListener("load", function(){
   function elegir(i,volar){
     activa=i; var c=D[i];
     D.forEach(function(x){x._el.classList.toggle("activa",x===c);});
+    // Solo se ven las capas de la corrida elegida: varias corridas comparten zona.
+    D.forEach(function(x){x.capas.forEach(function(k,j){
+      var L=capa(x,j), ver=(x===c)&&k.on;
+      if(ver&&!mapa.hasLayer(L)) mapa.addLayer(L);
+      if(!ver&&mapa.hasLayer(L)) mapa.removeLayer(L);});});
     if(volar) mapa.flyToBounds(c.bbox,{padding:[30,30],duration:0.8});
     var h='<div class="pf-tit"><span style="color:'+c.color+'">'+esc(c.etiqueta)+'</span><span>'+esc(fecha(c.generado))+'</span></div>'+
       '<h2>'+esc(c.titulo)+'</h2><div class="desc">'+esc(c.descripcion)+
@@ -428,11 +445,25 @@ window.addEventListener("load", function(){
        'validar en terreno antes de tomar decisiones. Archivos en <code>salidas/'+esc(c.carpeta)+'</code></div>';
     el("pf-det").innerHTML=h;
     Array.prototype.forEach.call(el("pf-det").querySelectorAll("input[data-j]"),function(x){
-      x.onchange=function(){var L=capa(c,+x.getAttribute("data-j")); if(x.checked) mapa.addLayer(L); else mapa.removeLayer(L);};});
+      x.onchange=function(){var j=+x.getAttribute("data-j"), L=capa(c,j); c.capas[j].on=x.checked;
+        if(x.checked) mapa.addLayer(L); else mapa.removeLayer(L);};});
     var op=el("pf-op"); if(op) op.oninput=function(){c.capas.forEach(function(k,j){
       if(k.tipo==="raster") capa(c,j).eachLayer(function(l){if(l.setOpacity) l.setOpacity(op.value/100);});});};
   }
-  el("pf-todo").onclick=function(){mapa.flyToBounds(LIM,{padding:[30,30],duration:0.8});};
+  D.forEach(function(x){x.capas.forEach(function(k){k.on=k.visible;});});
+  el("pf-todo").onclick=function(){
+    // Vista general: vuelven las capas por defecto de todas las corridas.
+    D.forEach(function(x){x._el.classList.remove("activa"); x.capas.forEach(function(k,j){
+      var L=capa(x,j); if(k.on&&!mapa.hasLayer(L)) mapa.addLayer(L);});});
+    mapa.flyToBounds(LIM,{padding:[30,30],duration:0.8});};
+  var sat=el("pf-sat"), oscura=window["__BASE_OSCURA__"], satelite=window["__BASE_SATELITE__"];
+  function base(){
+    if(sat.checked){mapa.removeLayer(oscura); mapa.addLayer(satelite); satelite.bringToBack();}
+    else{mapa.removeLayer(satelite); mapa.addLayer(oscura); oscura.bringToBack();}
+  }
+  try{sat.checked=localStorage.getItem("pf-sat")==="1";}catch(e){}
+  sat.onchange=function(){try{localStorage.setItem("pf-sat",sat.checked?"1":"0");}catch(e){} base();};
+  base();
   var auto=el("pf-auto"), temporizador=null;
   function programar(){ if(temporizador) clearTimeout(temporizador);
     if(auto.checked) temporizador=setTimeout(function(){location.reload();},30000); }
