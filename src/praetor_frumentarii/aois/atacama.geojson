@@ -1,0 +1,42 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "nombre": "atacama",
+    "descripcion": "Atacama: distrito El Salvador / Potrerillos (suelo)",
+    "modulo_sugerido": "suelo",
+    "aproximada": true,
+    "nota": "Límites aproximados, solo para demostración. No usar como delimitación oficial."
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -69.66,
+       -26.34
+      ],
+      [
+       -69.44,
+       -26.34
+      ],
+      [
+       -69.44,
+       -26.16
+      ],
+      [
+       -69.66,
+       -26.16
+      ],
+      [
+       -69.66,
+       -26.34
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,42 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "nombre": "biobio",
+    "descripcion": "Biobío: río Biobío entre Hualqui y Santa Juana (inundaciones)",
+    "modulo_sugerido": "cambios",
+    "aproximada": true,
+    "nota": "Límites aproximados, solo para demostración. No usar como delimitación oficial."
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -73.08,
+       -37.02
+      ],
+      [
+       -72.88,
+       -37.02
+      ],
+      [
+       -72.88,
+       -36.88
+      ],
+      [
+       -73.08,
+       -36.88
+      ],
+      [
+       -73.08,
+       -37.02
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

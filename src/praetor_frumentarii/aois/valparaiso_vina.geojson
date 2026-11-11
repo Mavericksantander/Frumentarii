@@ -1,0 +1,42 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "nombre": "valparaiso_vina",
+    "descripcion": "Valparaíso / Viña del Mar: incendios de febrero de 2024",
+    "modulo_sugerido": "cambios",
+    "aproximada": true,
+    "nota": "Límites aproximados, solo para demostración. No usar como delimitación oficial."
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -71.56,
+       -33.12
+      ],
+      [
+       -71.36,
+       -33.12
+      ],
+      [
+       -71.36,
+       -32.98
+      ],
+      [
+       -71.56,
+       -32.98
+      ],
+      [
+       -71.56,
+       -33.12
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

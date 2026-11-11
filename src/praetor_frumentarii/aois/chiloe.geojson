@@ -1,0 +1,42 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "nombre": "chiloe",
+    "descripcion": "Chiloé: Castro a Dalcahue (terreno y rutas)",
+    "modulo_sugerido": "terreno",
+    "aproximada": true,
+    "nota": "Límites aproximados, solo para demostración. No usar como delimitación oficial."
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -73.86,
+       -42.53
+      ],
+      [
+       -73.6,
+       -42.53
+      ],
+      [
+       -73.6,
+       -42.35
+      ],
+      [
+       -73.86,
+       -42.35
+      ],
+      [
+       -73.86,
+       -42.53
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

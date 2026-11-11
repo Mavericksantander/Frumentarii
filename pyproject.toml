@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "praetor-frumentarii"
+version = "0.1.0"
+description = "PRÆTOR Frumentarii: análisis geoespacial con imágenes satelitales abiertas para usos civiles en Chile (emergencias, logística, medio ambiente y energía)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9,<3.13"
+keywords = ["teledetección", "sentinel", "stac", "chile", "emergencias"]
+dependencies = [
+    "numpy",
+    "scipy",
+    "xarray",
+    "rasterio",
+    "rioxarray",
+    "pystac-client",
+    "odc-stac",
+    "planetary-computer",
+    "scikit-image",
+    "scikit-learn",
+    "geopandas",
+    "shapely>=2.0",
+    "pyproj",
+    "osmnx",
+    "matplotlib",
+    "folium",
+    "pillow",
+    "global-land-mask",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+leafmap = ["leafmap"]
+
+[project.scripts]
+frumentarii = "praetor_frumentarii.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+praetor_frumentarii = ["aois/*.geojson"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "red: pruebas que necesitan conexión a internet (se saltan solas si no hay red)",
+]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::PendingDeprecationWarning", "ignore::FutureWarning"]

@@ -1,0 +1,42 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "nombre": "magallanes",
+    "descripcion": "Estrecho de Magallanes frente a Punta Arenas (marino)",
+    "modulo_sugerido": "marino",
+    "aproximada": true,
+    "nota": "Límites aproximados, solo para demostración. No usar como delimitación oficial."
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -70.95,
+       -53.35
+      ],
+      [
+       -70.45,
+       -53.35
+      ],
+      [
+       -70.45,
+       -53.05
+      ],
+      [
+       -70.95,
+       -53.05
+      ],
+      [
+       -70.95,
+       -53.35
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}
